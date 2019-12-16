@@ -1,0 +1,333 @@
+---
+title: "Sensitivity/Specificity Analyses - Canine Leishmaniosis"
+author: "Marie Ozanne"
+date: "December 11, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# library(actuar)
+library(coda)
+library(R2OpenBUGS)
+# library(GGally)
+library(summarytools)
+```
+
+## Exploratory Analyses
+
+```{r exploratory, echo=FALSE}
+setwd("G:/My Drive/Research/Sensitivity_Specificity/")
+ss_data <- read.csv("DPPReaderData_cleaned_alldata_final.csv", na.strings = c("NA", "", "."))
+ss_data <- ss_data[,!(names(ss_data)%in%c("X", "X.1", "X.2", "X.3"))] ## remove columns with comments only
+names(ss_data) <- c(names(ss_data)[1:4], "PCR", "PCR_positive",
+                    "DPP", "DPP_positive", "ClinicalStatus")
+
+## For analysis purposes - treat all observations as independent and 'Timepoint' is irrelevant
+## Clinical Status (based on 2 or more clinical symptoms): N=negative, A=asymptomatic, S=symptomatic
+
+ss_data[which(ss_data$ClinicalStatus=="AS"),]$ClinicalStatus <- "A" ## replace AS with A for consistency
+ss_data[which(ss_data$ClinicalStatus=="SY"),]$ClinicalStatus <- "S" ## replace SY with S for consistency
+
+## drop unused levels from Clinical Status
+ss_data$ClinicalStatus <- droplevels(ss_data$ClinicalStatus)
+
+## "F" and "M" erroneously places in Age column
+ss_data$Age[which(ss_data$Age=="F")] <- NA
+ss_data$Age[which(ss_data$Age=="M")] <- NA
+ss_data$Age <- as.numeric(ss_data$Age)
+
+## One pup has PCR as positive - moving this indication to the PCR_positive
+## column, which currently has an NA
+ss_data[is.na(ss_data$PCR_positive),]$PCR_positive <- "Positive"
+
+## Standardize the levels for PCR_positive
+## Current levels: > levels(ss_data$PCR_positive)
+#  [1] "BL"                         "BL (single 1:10 well only)" "BL below threshold"   
+#  [4] "N"                          "Neg"                        "negative"     
+#  [7] "Negative"                   "P"                          "pos"       
+# [10] "Pos"                        "positive"                   "Positive"  
+### Assume all BL (below limits) are "Negative"
+ss_data[ss_data$PCR_positive=="BL",]$PCR_positive <- "Negative"
+ss_data[ss_data$PCR_positive=="BL (single 1:10 well only)",]$PCR_positive <- "Negative"
+ss_data[ss_data$PCR_positive=="BL below threshold",]$PCR_positive <- "Negative"
+ss_data[ss_data$PCR_positive=="N",]$PCR_positive <- "Negative"
+ss_data[ss_data$PCR_positive=="Neg",]$PCR_positive <- "Negative"
+ss_data[ss_data$PCR_positive=="negative",]$PCR_positive <- "Negative"
+
+### Standardize all positive entries to "Positive"
+ss_data[ss_data$PCR_positive=="P",]$PCR_positive <- "Positive"
+ss_data[ss_data$PCR_positive=="pos",]$PCR_positive <- "Positive"
+ss_data[ss_data$PCR_positive=="Pos",]$PCR_positive <- "Positive"
+ss_data[ss_data$PCR_positive=="positive",]$PCR_positive <- "Positive"
+
+## drop unused levels from PCR_positive
+ss_data$PCR_positive <- droplevels(ss_data$PCR_positive)
+
+## One pup had "positive" in the PCR column, which should be numeric
+## replace with NA - no numerical value available
+ss_data$PCR[which(ss_data$PCR=="positive")] <- NA
+
+## Change PCR to numeric
+ss_data$PCR <- as.numeric(ss_data$PCR)
+
+## Print summary of data
+summary(ss_data[,!(names(ss_data) %in% c("Timepoint", "ID"))])
+
+## Create new DPP_positive variable based on reader cutoffs (>9.9 is positive)
+ss_data$DPP_positive2 <- ifelse(ss_data$DPP > 9.9,
+                                c("Positive"), c("Negative"))
+```
+
+## Model 1:
+
+This model is designed to let us differentiate between negative and positive (asymptomatic or symptomatic as determined by physical exam information - 2 or more symptoms) dogs based on positive/negative PCR and DPP and associated sensitivity and specificity. This assumes the two tests are positively correlated.
+
+### Model Setup
+
+#### Notation:
+
+* $Y^{PCR}_i$: PCR test result for observation $i$
+* $Y^{DPP}_i$: DPP test result for observation $i$ (DPP reader \underline{or} DPP positive/negative)
+* $\mathbf{Y}_i=(Y^{DPP}_i, Y^{PCR}_i)$
+* $D_i$: disease status for observation $i$ (positive/negative)
+* $S^{DPP}=P(DPP^+|D)$: sensitivity of DPP test
+* $S^{PCR}=P(PCR^+|D)$: sensitivity of PCR test
+* $C^{DPP}=P(DPP^-|D^c):$ specificity of DPP test
+* $C^{PCR}=P(PCR^-|D^c):$ specificity of PCR test
+
+
+#### Data Model:
+
+$$
+\begin{aligned}
+Y^{DPP}_i|\pi^{DPP}_i, D_i&\sim Bernoulli(\pi^{DPP}_i)
+\end{aligned}
+$$
+
+
+$$
+\begin{aligned}
+Y^{PCR}_i|\pi^{PCR}_i, D_i&\sim Bernoulli(\pi^{PCR}_i)
+\end{aligned}
+$$
+
+
+#### Process Model:
+
+DPP
+$$
+\begin{aligned}
+\pi_i^{DPP}&=P(DPP^+\cap PCR^+ \cap D_i)+P(DPP^+\cap PCR^+\cap D_i^c)\\
+& \ \ \ + P(DPP^+\cap PCR^-\cap D_i) + P(DPP^+\cap PCR^-\cap D_i^c)\\
+&=P(DPP^+\cap PCR^+ | D_i)P(D_i)+P(DPP^+\cap PCR^+|D_i^c)P(D_i^c)\\
+& \ \ \ + P(DPP^+\cap PCR^-|D_i)P(D_i) + P(DPP^+\cap PCR^-|D_i^c)P(D_i^c)\\
+&=((S^{DPP}\times S^{PCR}+covs_{12})+(S^{DPP}\times(1-S^{PCR})-covs_{12}))\times P(D_i)\\
+& \ \ \ + [((1-C^{DPP})\times (1-C^{PCR})+covc_{12})+((1-C^{DPP})\times(C^{PCR})-covc_{12})]\times P(D_i^c)\\
+\end{aligned}
+$$
+
+PCR
+$$
+\begin{aligned}
+\pi_i^{PCR}&=P(DPP^+\cap PCR^+\cap D_i)+P(DPP^+\cap PCR^+\cap D_i^c)\\
+& \ \ \ +P(DPP^-\cap PCR^+\cap D_i)+P(DPP^-\cap PCR^+\cap D_i^c)\\
+&=P(DPP^+\cap PCR^+|D_i)P(D_i)+P(DPP^+\cap PCR^+| D_i^c)P(D_i^c)\\
+& \ \ \ +P(DPP^-\cap PCR^+|D_i)P(D_i)+P(DPP^-\cap PCR^+|D_i^c)P(D_i^c)
+\end{aligned}
+$$
+
+Disease
+$$
+D_i|\boldsymbol{\beta}\sim Bernoulli(\pi^D_i)
+$$
+where 
+
+$$\pi^D_i=P(D_i)=\frac{\exp\left\{\epsilon_i + X_i\boldsymbol{\beta} \right\}}{1+\exp\left\{\epsilon_i+X_i\boldsymbol{\beta} \right\}}; \ X_i=[1, \mathbf{1}_{Sex_i=M}, Age_i]$$.
+
+
+#### Parameter Model:
+$$
+\boldsymbol{\beta}\sim MVN(\boldsymbol{\mu}_\beta, \Sigma_\beta).
+$$
+
+### Model Fit:
+
+The model was fit using OpenBUGS via the R2OpenBUGS package in R. 
+
+```{r OpenBUGS Model 1, echo=FALSE, results="hide"}
+## ranges of sensitivities and specificities
+sens.pcr.range <- c(0.839, 0.990)
+sens.dpp.range <- c(0.832, 0.930)
+spec.pcr.range <- c(0.871, 0.970)
+spec.dpp.range <- c(0.682, 0.951)
+
+sens.pcr <- mean(sens.pcr.range)
+sens.dpp <- mean(sens.dpp.range)
+spec.pcr <- mean(spec.pcr.range)
+spec.dpp <- mean(spec.dpp.range)
+
+prev.range <- c(0.05,0.10)
+prev <- mean(prev.range)
+
+## Omit missing values
+ss_data_nao <- na.omit(ss_data[,names(ss_data) %in% c("Sex", "Age", "DPP",
+                                                      "ClinicalStatus",
+                                                      "DPP_positive",
+                                                      "PCR_positive",
+                                                      "DPP_positive2")])
+set.seed(123124)
+train_idx <- sample(1:nrow(ss_data_nao), 0.8*nrow(ss_data_nao))
+# ss_data2 <- ss_data_nao[train_idx,]
+ss_data2 <- ss_data_nao[ss_data_nao$ClinicalStatus!="A",]
+
+nind <- nrow(ss_data2)
+
+y.dpp1.pcr1 <- 1*(ss_data2$DPP_positive2=="Positive" & ss_data2$PCR_positive=="Positive")
+y.dpp1.pcr0 <- 1*(ss_data2$DPP_positive2=="Positive" & ss_data2$PCR_positive=="Negative")
+y.dpp0.pcr1 <- 1*(ss_data2$DPP_positive2=="Negative" & ss_data2$PCR_positive=="Positive")
+y.dpp0.pcr0 <- 1*(ss_data2$DPP_positive2=="Negatove" & ss_data2$PCR_positive=="Negative")
+
+Sex <- 1*(ss_data2$Sex=="M")
+Age <- ss_data2$Age
+Age2 <- as.numeric(Age)
+DPP <- ss_data2$DPP
+
+a_prev <- prev/(1-prev)
+b_prev <- 1
+
+a_s_dpp <- sens.dpp/(1-sens.dpp)
+b_s_dpp <- 1
+a_c_dpp <- spec.dpp/(1-spec.dpp)
+b_c_dpp <- 1
+
+a_lambda.D <- 1
+b_lambda.D <- 1
+a_gamma.D <- 1
+b_gamma.D <- 1
+a_lambda.Dbar <- 1
+b_lambda.Dbar <- 1
+a_gamma.Dbar <- 1
+b_gamma.Dbar <- 1
+
+data <- list(nind=nind,
+             y.dpp1.pcr1=y.dpp1.pcr1,
+             y.dpp1.pcr0=y.dpp1.pcr0,
+             y.dpp0.pcr1=y.dpp0.pcr1,
+             y.dpp0.pcr0=y.dpp0.pcr0,
+             Sex=Sex,
+             Age=Age2,
+             a_prev=a_prev,
+             b_prev=b_prev,
+             a_s_dpp=a_s_dpp,
+             b_s_dpp=b_s_dpp,
+             a_c_dpp=a_c_dpp,
+             b_c_dpp=b_c_dpp,
+             a_lambda.D=a_lambda.D,
+             b_lambda.D=b_lambda.D,
+             a_gamma.D=a_gamma.D,
+             b_gamma.D=b_gamma.D,
+             a_lambda.Dbar=a_lambda.Dbar,
+             b_lambda.Dbar=b_lambda.Dbar,
+             a_gamma.Dbar=a_gamma.Dbar,
+             b_gamma.Dbar=b_gamma.Dbar)
+
+## Initialize all prior values
+inits <- function(){
+  list(pi=rbeta(1,a_prev,b_prev),
+       eta.dpp=rbeta(1,a_s_dpp,b_s_dpp),
+       theta.dpp=rbeta(1,a_c_dpp,b_c_dpp),
+       lambda.D=rbeta(1,a_lambda.D, b_lambda.D),
+       gamma.D=rbeta(1,a_gamma.D, b_gamma.D),
+       lambda.Dbar=rbeta(1,a_lambda.Dbar, b_lambda.Dbar),
+       gamma.Dbar=rbeta(1,a_gamma.Dbar, b_lambda.Dbar),
+       b1=rnorm(1,0,2),
+       b2=rnorm(1,0,2),
+       b3=rnorm(1,0,2),
+       eps=rnorm(nind,0,2))
+}
+
+## Start MCMC simulation
+sens_spec.sim <- bugs(data=data, 
+                      inits=inits, ## FIX THIS LINE
+                      model.file="OpenBUGS_S_Sp_NSonly_Georgiadis_2003.txt",
+                      parameters=c("b1","b2","b3","eps","pi.D",
+                                   "rho.D", "rho.Dbar"),
+                      n.chains=2, n.iter=5000, n.burnin=1000, 
+                      codaPkg=TRUE, debug=TRUE)
+
+## Use coda to read things back into R
+codaobject1 <- read.bugs(sens_spec.sim)
+model1_df <- do.call(rbind.data.frame, codaobject1)
+
+## Graphial summaries of posterior distribtuions
+par(mfrow=c(1,3))
+hist(model1_df$b1, main="Intercept (b0)", xlab="posterior draws")
+abline(v=mean(model1_df$b1), lty="dashed", col="red")
+hist(model1_df$b2, main="Sex=Male (b1)", xlab="posterior draws")
+abline(v=mean(model1_df$b2), lty="dashed", col="red")
+hist(model1_df$b3, main="Age (b2)", xlab="posterior draws")
+abline(v=mean(model1_df$b3), lty="dashed", col="red")
+dev.off()
+
+par(mfrow=c(1,2))
+hist(model1_df$rho.D, main="Correlation D", xlab="posterior draws")
+abline(v=mean(model1_df$rho.D), lty="dashed", col="red")
+hist(model1_df$rho.Dbar, main="Correlation Dbar", xlab="posterior draws")
+abline(v=mean(model1_df$rho.Dbar), lty="dashed", col="red")
+dev.off()
+
+## Numeric summaries of posterior distributions
+# boxplot(model1_df[,!(names(model1_df) %in% c("deviance"))])
+
+```
+
+### Model Predictions
+
+```{r Model Predictions Model 1, echo=FALSE}
+## Want to predict disease state using our model
+## Posterior draws
+set.seed(123123)
+nn <- 500
+
+Beta_m1 <- model1_df[,names(model1_df) %in% c("b1","b2","b3")]
+eps_m1 <- as.data.frame(model1_df[,grepl(names(model1_df), pattern="eps", fixed=TRUE)])
+pi.D_m1 <- as.data.frame(model1_df[,grepl(names(model1_df), pattern="pi.D", fixed=TRUE)])
+pi.D_m1 <- pi.D_m1[5001:nrow(pi.D_m1),]
+
+## define test set
+test_set1 <- ss_data_nao[ss_data_nao$ClinicalStatus!="A",]
+
+model1_PD <- matrix(data=NA, nrow=nrow(test_set1),ncol=nn)
+
+## Summarize compartment membership probabilities with median and CIs
+tmp_PD <- apply(pi.D_m1, 2, quantile, c(0.025,0.50,0.975))
+
+pred_m1_df <- data.frame(Age=test_set1$Age,
+                         Sex=test_set1$Sex,
+                         Prob_D_median=t(tmp_PD)[,2],
+                         Prob_D_lb=t(tmp_PD)[,1],
+                         Prob_D_ub=t(tmp_PD)[,3],
+                         ClinicalStatus=test_set1$ClinicalStatus,
+                         PCR_positive=test_set1$PCR_positive,
+                         DPP_positive=test_set1$DPP_positive)  
+
+print("Clinical Status == N")
+summary(pred_m1_df[pred_m1_df$ClinicalStatus=="N",])
+
+print("Clinical Status == S")
+summary(pred_m1_df[pred_m1_df$ClinicalStatus=="S",])
+
+## check correspondance with tests
+print("PCR Positive and DPP Positive")
+summary(pred_m1_df[pred_m1_df$PCR_positive=="Positive" & pred_m1_df$DPP_positive=="Positive",])
+
+print("PCR Positive and DPP Negative -- NOBODY HERE")
+# summary(pred_m1_df[pred_m1_df$PCR_positive=="Positive" & pred_m1_df$DPP_positive=="Negative",])
+
+print("PCR Negative and DPP Positive")
+summary(pred_m1_df[pred_m1_df$PCR_positive=="Negative" & pred_m1_df$DPP_positive=="Positive",])
+
+print("PCR Negative and DPP Negative")
+summary(pred_m1_df[pred_m1_df$PCR_positive=="Negative" & pred_m1_df$DPP_positive=="Negative",])
+
+```
