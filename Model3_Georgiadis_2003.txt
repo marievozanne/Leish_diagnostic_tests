@@ -1,0 +1,41 @@
+model
+{
+
+# Likelihood
+
+## Data Model
+Z_11 ~ dbinom(X_11, pi.dpp1.pcr1)
+Z_10 ~ dbinom(X_10, pi.dpp1.pcr0)
+Z_01 ~ dbinom(X_01, pi.dpp0.pcr1)
+Z_00 ~ dbinom(X_00, pi.dpp0.pcr0)
+
+## Process Model
+pi.dpp1.pcr1 <- (pi.D*eta.dpp*lambda.D)/(pi.D*eta.dpp*lambda.D+(1-pi.D)*(1-theta.dpp)*(1-gamma.Dbar))
+pi.dpp1.pcr0 <- (pi.D*eta.dpp*(1-lambda.D))/(pi.D*eta.dpp*(1-lambda.D)+(1-pi.D)*(1-theta.dpp)*gamma.Dbar)
+pi.dpp0.pcr1 <- (pi.D*(1-eta.dpp)*gamma.D)/(pi.D*(1-eta.dpp)*gamma.D+(1-pi.D)*theta.dpp*(1-lambda.Dbar))
+pi.dpp0.pcr0 <- (pi.D*(1-eta.dpp)*(1-gamma.D))/(pi.D*(1-eta.dpp)*(1-lambda.D)+(1-pi.D)*theta.dpp*lambda.Dbar)
+
+
+eta.pcr <- lambda.D*eta.dpp+lambda.D*(1-eta.dpp)
+theta.pcr <- gamma.Dbar*(1-theta.dpp)+lambda.Dbar*theta.dpp
+
+delta.D <- eta.dpp*lambda.D-eta.dpp*eta.pcr
+delta.Dbar <- theta.dpp*lambda.Dbar-theta.dpp*theta.pcr
+
+rho.D <- delta.D/sqrt(eta.dpp*(1-eta.dpp)*eta.pcr*(1-eta.pcr))
+rho.Dbar <- delta.Dbar/sqrt(theta.dpp*(1-theta.dpp)*theta.pcr*(1-theta.pcr))
+
+# Priors
+
+## Prevalence
+pi.D ~ dbeta(a_prev, b_prev)
+
+## DPP sensitivity/specificity
+eta.dpp ~ dbeta(a_s_dpp, b_s_dpp)
+theta.dpp ~ dbeta(a_c_dpp, b_c_dpp)
+
+lambda.D ~ dbeta(a_lambda.D, b_lambda.D)
+gamma.D ~ dbeta(a_gamma.D, b_gamma.D)
+lambda.Dbar ~ dbeta(a_lambda.Dbar, b_lambda.Dbar)
+gamma.Dbar ~ dbeta(a_gamma.Dbar, b_gamma.Dbar)
+}
