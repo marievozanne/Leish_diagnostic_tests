@@ -1,0 +1,199 @@
+---
+title: "Sensitivity/Specificity Analyses - Canine Leishmaniosis"
+author: "Marie Ozanne"
+date: "January 30, 2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+# library(actuar)
+library(coda)
+library(ggplot2)
+library(R2OpenBUGS)
+# library(GGally)
+library(summarytools)
+```
+
+# Exploratory Analyses
+
+```{r exploratory, echo=FALSE}
+setwd("G:/My Drive/Research/Sensitivity_Specificity/")
+ss_data <- read.csv("Data/DPPReaderData_cleaned_alldata_final.csv", na.strings = c("NA", "", "."))
+ss_data <- ss_data[,!(names(ss_data)%in%c("X", "X.1", "X.2", "X.3"))] ## remove columns with comments only
+names(ss_data) <- c(names(ss_data)[1:4], "PCR", "PCR_positive",
+                    "DPP", "DPP_positive", "ClinicalStatus")
+
+## For analysis purposes - treat all observations as independent and 'Timepoint' is irrelevant
+## Clinical Status (based on 2 or more clinical symptoms): N=negative, A=asymptomatic, S=symptomatic
+
+ss_data[which(ss_data$ClinicalStatus=="AS"),]$ClinicalStatus <- "A" ## replace AS with A for consistency
+ss_data[which(ss_data$ClinicalStatus=="SY"),]$ClinicalStatus <- "S" ## replace SY with S for consistency
+
+## drop unused levels from Clinical Status
+ss_data$ClinicalStatus <- droplevels(ss_data$ClinicalStatus)
+
+## "F" and "M" erroneously places in Age column
+ss_data$Age[which(ss_data$Age=="F")] <- NA
+ss_data$Age[which(ss_data$Age=="M")] <- NA
+ss_data$Age <- as.numeric(ss_data$Age)
+
+## One pup has PCR as positive - moving this indication to the PCR_positive
+## column, which currently has an NA
+ss_data[is.na(ss_data$PCR_positive),]$PCR_positive <- "Positive"
+
+## Standardize the levels for PCR_positive
+## Current levels: > levels(ss_data$PCR_positive)
+#  [1] "BL"                         "BL (single 1:10 well only)" "BL below threshold"   
+#  [4] "N"                          "Neg"                        "negative"     
+#  [7] "Negative"                   "P"                          "pos"       
+# [10] "Pos"                        "positive"                   "Positive"  
+### Assume all BL (below limits) are "Negative"
+ss_data[ss_data$PCR_positive=="BL",]$PCR_positive <- "Negative"
+ss_data[ss_data$PCR_positive=="BL (single 1:10 well only)",]$PCR_positive <- "Negative"
+ss_data[ss_data$PCR_positive=="BL below threshold",]$PCR_positive <- "Negative"
+ss_data[ss_data$PCR_positive=="N",]$PCR_positive <- "Negative"
+ss_data[ss_data$PCR_positive=="Neg",]$PCR_positive <- "Negative"
+ss_data[ss_data$PCR_positive=="negative",]$PCR_positive <- "Negative"
+
+### Standardize all positive entries to "Positive"
+ss_data[ss_data$PCR_positive=="P",]$PCR_positive <- "Positive"
+ss_data[ss_data$PCR_positive=="pos",]$PCR_positive <- "Positive"
+ss_data[ss_data$PCR_positive=="Pos",]$PCR_positive <- "Positive"
+ss_data[ss_data$PCR_positive=="positive",]$PCR_positive <- "Positive"
+
+## drop unused levels from PCR_positive
+ss_data$PCR_positive <- droplevels(ss_data$PCR_positive)
+
+## One pup had "positive" in the PCR column, which should be numeric
+## replace with NA - no numerical value available
+ss_data$PCR[which(ss_data$PCR=="positive")] <- NA
+
+## Change PCR to numeric
+ss_data$PCR <- as.numeric(ss_data$PCR)
+
+## Print summary of data
+# summary(ss_data[,!(names(ss_data) %in% c("Timepoint", "ID"))])
+
+## Create new DPP_positive variable based on reader cutoffs (>9.9 is positive)
+ss_data$DPP_positive2 <- ifelse(ss_data$DPP > 9.9,
+                                c("Positive"), c("Negative"))
+
+## Omit missing values
+ss_data_nao <- na.omit(ss_data[,names(ss_data) %in% c("Sex", "Age", "DPP",
+                                                      "ClinicalStatus",
+                                                      "DPP_positive",
+                                                      "PCR_positive",
+                                                      "DPP_positive2")])
+
+## Create contingency table for data we are using:
+ss_data2 <- ss_data_nao[ss_data_nao$ClinicalStatus!="A",]
+ss_data2$DPP_positive2 <- as.factor(ss_data2$DPP_positive2)
+table(PCR=ss_data2$PCR_positive, DPP=ss_data2$DPP_positive2)
+
+## Include variable for diagnostically positive (positive on at least one test)
+ss_data2$Diagnostically_positive <- rep(NA, nrow(ss_data2))
+ss_data2[ss_data2$PCR_positive == "Positive" | ss_data2$DPP_positive2 == "Positive",]$Diagnostically_positive <- "Positive"
+ss_data2[ss_data2$PCR_positive == "Negative" & ss_data2$DPP_positive2 == "Negative",]$Diagnostically_positive <- "Negative"
+```
+
+# Models
+
+Angela's paper (Toepp et al., 2019, https://doi.org/10.1371/journal.pntd.0007058) uses logistic regression, with age, sex, and variables that have to do with diagnostic tests as explanatory variables. They are something like this:  
+
+**Model A 1:** $logit(\pi_k)=\beta_0+\beta_1Age_k + \beta_2Sex_k + \beta_3 Y_k$, where $Y_k$ is diagnostically positive (as defined in Model 1 below), but for the mom and $\pi_k$ is the probability of disease for individual $k$
+
+**Model A 2:** $logit(\pi_k)=\beta_0+\beta_1Age_k + \beta_2Sex_k + \beta_3 T_{1k} + \beta_4T_{2k}$, where $T_{jk}$ is the result for Test $j$ (as defined in Model 1 below), but for the mom and $\pi_k$ is the probability of disease for individual $k$
+
+Note, these models were fit with a log link function, presumably so that relative risks could be recovered?
+
+We plan to evaluate similar models for our data and to then incorporate sensitivity and specificity of the tests into these models. Then we will compare the model performance to that of other methods. Hopefully we will see an improvement/some details that we miss when we do not include the sensitivity and specificity for the tests.
+
+In all these models, we will assume that the observations are independent.
+
+## Model 1: Diagnostically positive model, no status uncertainty
+
+This model does not imply that both tests are perfect. It does assume that all symptomatic (infectious) individuals will test positive on at least one of the two tests, i.e. $P(Y_k=1|D_k=1)=1$. Analogously, it assumes that all uninfected (negative) individuals will test negative on both tests, i.e. $P(Y_k=0|D=0)=1$. Basically, this means that we're assuming $Y_k=D_k$.
+
+### Data Model
+
+- For $k\in 1,...,K$ individuals, $Y_k$ is the diagnostic status of individual $k$;
+- For $j\in\left\{1,2\right\}$ tests, $T_{jk}$ is the result of test $j$ for individual $k$; 0 is negative, 1 is positive
+- The probability of individual $k$ being diagnostically positive is $\rho_{dp}$
+
+Form of the data:
+
+$$ Y_k|T_{1k}, T_{2k}=  \left\{
+\begin{array}{ll}
+      1 & T_{1k}=1 \cup \ T_{2k}=1  \\
+      0 & T_{1k} = 0 \cap T_{2k} = 0  \\
+\end{array} 
+\right. $$ 
+
+Assumption: $Y_k=D_k$, where $D_k$ is the disease status of individual $k$
+
+### Process Model 
+$$
+logit(P(D_k=1|Age_k, Sex_k))=\beta_0+\beta_1\times Age_k+\beta_2\times Sex_k
+$$
+
+It seems like this should be centered around prevalence - would this be the interpretation of the intercept (the intercept would be $logit(\pi)$) if I do not include prevalence in the model?
+
+
+## Model 2: Split out into two tests
+
+## Model 3: 
+
+The data outcome we are using is "diagnostically positive", meaning that an individual tests positive on at least one diagnostic test. This is what we have used in our other papers and seems to be popular in the literature (add some references to this). In this model, we assume that the two diagnostic tests are independent, and that there is some imprecision in the test results, so we include sensitivity and specificity for each test in the model.
+
+### Data Model
+
+$$
+Y_k|T_{1k},T_{2k}\sim Bernoulli\left(P(T_{1k}=1)\cup P(T_{2k}=1) \right)
+$$
+where $P(T_{1k}=1)\cup P(T_{2k}=1)=P(T_{1k}=1)+P(T_{2k}=1)-P(T_{1k}=1)\times P(T_{2k}=1)$ since we are assuming that the test outcomes are independent.
+
+For the probability of a positive test result for individual $k$ on test $j$,
+
+\begin{align*}
+P(T_{jk}=1)&=P(T_{jk}=1 \cap D_k=1) + P(T_{jk}=1 \cap D_k=0)\\
+&=P(T_{jk}=1| D_k=1)P(D_k=1) + P(T_{jk}=1| D_k=0)P(D_k=0)\\
+&=\underbrace{P(T_{jk}=1| D_k=1)}_{\text{Sensitivity}}P(D_k=1) + \underbrace{[1-P(T_{jk}=0| D_k=0)]}_{1-\text{Specificity}}P(D_k=0)\\
+\end{align*}
+
+
+### Process Model
+
+Now we need a model for the probability of disease for individual $k$ that depends on disease prevalence, and some individual level factors. 
+
+$$
+\text{logit}(P(D_k))\sim \text{Normal}(\text{logit}(\pi) + \mathbf{x}_k^T\boldsymbol{\beta} + \epsilon_k, \ \delta^2)
+$$
+
+where $\pi$ is the population prevalence of disease, $\mathbf{x}^T_k=(1, Age_k, Sex_k)$, and $\epsilon_k$ is a random individual effect.
+
+### Prior Model
+
+#### Prevalence:
+$$
+logit(\pi) \sim Normal(\mu_\pi, \sigma^2_\pi)
+$$
+
+We have a range for the prevalence of (0.05, 0.10). This corresponds to a range of (`r round(log(0.05)/(1-log(0.05)),4)`, `r round(log(0.10)/(1-log(0.10)),4)`) on the logit scale. 
+
+```{r}
+hist(rnorm(10000, mean = log(0.075)/(1-log(0.075)), sd = 0.03),
+     main="Logit prevalence prior distribution histogram",
+     xlab="logit(prevalence)")
+```
+
+
+#### Other parameters:
+$$
+\boldsymbol{\beta}\sim Normal(\boldsymbol{\mu}_\beta, \Sigma_\beta)
+$$
+
+We will assume that the regression coefficients are independent, so $\Sigma_\beta$ is a diagonal matrix.
+
+### OpenBUGS Model 3 Implementation
