@@ -1,0 +1,31 @@
+model
+{
+
+# Likelihood
+for (i in 1:nind){
+    ## Process Model - diagnostically positive
+    y[i] ~ dbern(pi.dp[i])
+
+    pi.dp[i] <- pi.pcr[i] + pi.dpp[i] - pi.pcr[i]*pi.dpp[i]
+
+    pi.pcr[i] <- pi.D[i]*sens.pcr + (1-pi.D[i])*(1-spec.pcr)
+    pi.dpp[i] <- pi.D[i]*sens.dpp + (1-pi.D[i])*(1-spec.dpp)
+
+    # Disease Model
+    logit.pi.D[i] ~ dnorm(logit.pi+(b0+eps[i])+b1*Sex[i]+b2*Age[i], 1)
+    pi.D[i] <- exp(logit.pi.D[i])/(1+exp(logit.pi.D[i]))
+
+    eps[i] ~ dnorm(0,5.0E-3)
+    }
+
+# Priors
+## Prevalence
+logit.pi ~ dnorm(log(prev)/(1-log(prev), 1/0.03)
+
+## Regression coefficients
+b0 ~ dnorm(0,1)
+b1 ~ dnorm(0,1)
+b2 ~ dnorm(0,1)
+
+}
+
