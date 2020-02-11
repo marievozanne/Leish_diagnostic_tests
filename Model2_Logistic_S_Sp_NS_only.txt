@@ -12,7 +12,7 @@ for (i in 1:nind){
     pi.dpp[i] <- pi.D[i]*sens.dpp + (1-pi.D[i])*(1-spec.dpp)
 
     # Disease Model
-    pi.D[i] <- exp(lpi+b0+eps[i]+b1*Sex[i]+b2*Age[i])/(1+exp(lpi+b0+eps[i]+b1*Sex[i]+b2*Age[i]))
+    pi.D[i] <- exp(lpi+eps[i])/(1+exp(lpi+eps[i]))
     
     eps[i] ~ dnorm(0,5.0E-3)
     }
