@@ -12,9 +12,7 @@ for (i in 1:nind){
     pi.dpp[i] <- pi.D[i]*sens.dpp + (1-pi.D[i])*(1-spec.dpp)
 
     # Disease Model
-    pi.D[i] <- exp(lpi+eps[i])/(1+exp(lpi+eps[i]))
-    
-    eps[i] ~ dnorm(0,5.0E-3)
+    logit(pi.D[i]) <- lpi+b1*Age[i]+b2*Sex[i]+b3*Age[i]*Sex[i]
     }
 
 # Priors
@@ -23,7 +21,7 @@ mu.lpi <- log(prev)/(1-log(prev))
 lpi ~ dnorm(mu.lpi, prec.lpi)
 
 ## Regression coefficients
-b0 ~ dnorm(0,1)
 b1 ~ dnorm(0,1)
 b2 ~ dnorm(0,1)
+b3 ~ dnorm(0,1)
 }
