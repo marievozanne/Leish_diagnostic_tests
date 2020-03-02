@@ -1,0 +1,27 @@
+model
+{
+
+# Likelihood
+for (i in 1:nind){
+    ## Data Model - separate tests
+    y.pcr[i] ~ dbern(pi.pcr[i])
+    y.dpp[i] ~ dbern(pi.dpp[i])
+    
+    pi.pcr[i] <- D[i]*sens.pcr + (1-D[i])*(1-spec.pcr)
+    pi.dpp[i] <- D[i]*sens.dpp + (1-D[i])*(1-spec.dpp)
+
+    ## Process Model
+    pi.D[i] <- exp(lpi+b1*Age[i]+b2*Sex[i]+b3*Age[i]*Sex[i])/(1+exp(lpi+b1*Age[i]+b2*Sex[i]+b3*Age[i]*Sex[i]))
+    D[i] ~ dbern(pi.D[i])
+    }
+
+# Priors
+## Prevalence
+mu.lpi <- log(prev)/(1-log(prev))
+lpi ~ dnorm(mu.lpi, prec.lpi)
+
+## Regression coefficients
+b1 ~ dnorm(0,1)
+b2 ~ dnorm(0,1)
+b3 ~ dnorm(0,1)
+}
