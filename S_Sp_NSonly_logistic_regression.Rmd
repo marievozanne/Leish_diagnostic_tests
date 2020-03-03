@@ -1,7 +1,7 @@
 ---
 title: "Sensitivity/Specificity Analyses - Canine Leishmaniosis"
 author: "Marie Ozanne"
-date: "February 27, 2020"
+date: "March 3, 2020"
 output:
   pdf_document: default
 ---
@@ -130,7 +130,7 @@ where $\pi_{2k}=P(T_{2k}=1|D_k)=D_k\times \underbrace{P(T_{2k}=1|D_k=1)}_{sensit
 $$
 D_k \sim Bernoulli(\delta_k)
 $$
-where $\delta_k=logit^{-1}(logit(\rho)+\mathbf{x}_k^T\boldsymbol{\beta})$.
+where $\delta_k=logit^{-1}(logit(\rho)+\mathbf{x}_k^T\boldsymbol{\beta}+\epsilon_k)$, and $\epsilon_k$ is a random effect for individual $k$.
 
 ### Prior Model
 
@@ -158,6 +158,12 @@ $$
 \boldsymbol{\beta}\sim Normal(\boldsymbol{\mu}_\beta,\boldsymbol{\Sigma}_\beta)
 $$
 where $\boldsymbol{\mu}_\beta=\mathbf{0}$ and $\boldsymbol{\Sigma}_\beta=\mathbf{I}$ in our code. 
+
+#### Random intercept
+
+$$
+\boldsymbol{\epsilon}\sim Normal(0,5000)
+$$
 
 
 
@@ -201,24 +207,26 @@ data <- list(nind=nind,
              sens.dpp=sens.dpp,
              spec.dpp=spec.dpp,
              prev=prev,
-             prec.lpi=1/0.03
+             prec.lpi=100
 )
 
 ## Initialize all prior values
 inits <- function(){
-  list(lpi=rnorm(1,log(prev)/(1-log(prev)), 0.03),
+  list(lpi=rnorm(1,log(prev)/(1-log(prev)), 100),
        b1=rnorm(0,1),
        b2=rnorm(0,1),
-       b3=rnorm(0,1))
+       b3=rnorm(0,1),
+       eps=rnorm(0,5000))
 }
 
 ## Start MCMC simulation
 sens_spec.sim_m1 <- bugs(data=data, 
                       inits=inits, ## FIX THIS LINE
                       model.file="Model1_separate_tests_GB.txt",
-                      parameters=c("D", "lpi", 
-                                   "b1", "b2", "b3"),
-                      n.chains=3, n.iter=10000, n.burnin=5000, 
+                      parameters=c("b1", "b2", "b3","lpi", 
+                                   "D", 
+                                   "eps"),
+                      n.chains=3, n.iter=30000, n.burnin=10000, 
                       codaPkg=TRUE, debug=TRUE)
 
 ## Use coda to read things back into R
@@ -285,6 +293,119 @@ p2 <- (ggplot(data=pred_df_m1, aes(x=Clinical_status, y=D))
 ggarrange(p1,p2, nrow=1)
 ```
 
+### OpenBUGS Model 1 Implementation - Informative Prior Prevalence
+
+```{r Open Bugs Model 1b, include=FALSE, message=FALSE}
+## Specify data
+y.pcr <- 1*(ss_data2$PCR_positive=="Positive")
+y.dpp <- 1*(ss_data2$DPP_positive2=="Positive")
+
+nind <- nrow(ss_data2)
+
+Sex2 <- 1*(ss_data2$Sex=="M")
+Age <- as.numeric(ss_data2$Age)
+
+prev2 <- 0.3
+
+data <- list(nind=nind,
+             y.pcr=y.pcr,
+             y.dpp=y.dpp,
+             Sex=Sex2,
+             Age=Age,
+             sens.pcr=sens.pcr,
+             spec.pcr=spec.pcr,
+             sens.dpp=sens.dpp,
+             spec.dpp=spec.dpp,
+             prev=prev2,
+             prec.lpi=100
+)
+
+## Initialize all prior values
+inits <- function(){
+  list(lpi=rnorm(1,log(prev2)/(1-log(prev2)), 10),
+       b1=rnorm(0,1),
+       b2=rnorm(0,1),
+       b3=rnorm(0,1),
+       eps=rnorm(0,5000))
+}
+
+## Start MCMC simulation
+sens_spec.sim_m1b <- bugs(data=data, 
+                      inits=inits, ## FIX THIS LINE
+                      model.file="Model1_separate_tests_GB.txt",
+                      parameters=c("b1", "b2", "b3","lpi", 
+                                   "D", 
+                                   "eps"),
+                      n.chains=3, n.iter=30000, n.burnin=10000, 
+                      codaPkg=TRUE, debug=TRUE)
+
+## Use coda to read things back into R
+codaobject_m1b <- read.bugs(sens_spec.sim_m1b)
+model1b_df <- do.call(rbind.data.frame, codaobject_m1b)
+```
+
+### OpenBUGS Model 1 Posterior Distributions - Informative Prior Prevalence
+
+```{r}
+par(mfrow=c(2,2))
+## Graphial summaries of posterior distributions
+hist(exp(model1b_df$lpi)/(1+exp(model1b_df$lpi)), main="prevalence", xlab="posterior draws")
+abline(v=mean(exp(model1b_df$lpi)/(1+exp(model1b_df$lpi))), lty="dashed", col="red")
+
+hist(model1b_df$b1, main="Age", xlab="posterior draws")
+abline(v=mean(model1b_df$b1), lty="dashed", col="red")
+hist(model1b_df$b2, main="Sex", xlab="posterior draws")
+abline(v=mean(model1b_df$b2), lty="dashed", col="red")
+hist(model1b_df$b3, main="Age/Sex Interaction", xlab="posterior draws")
+abline(v=mean(model1b_df$b3), lty="dashed", col="red")
+```
+
+### OpenBUGS Model 1 Disease State Classification - Informative Prior Prevalence
+
+```{r}
+## Set up storage for model results
+pred_df_m1b <- data.frame(obs=1:nind,
+                         D=rep(NA,nind), ## average estimate
+                         SD=rep(NA,nind),
+                         LB=rep(NA,nind), ## 2.5th percentile
+                         UB=rep(NA,nind), ## 97.5th percentile
+                         model_assignment=rep(NA,nind),
+                         Clinical_status=ss_data2$ClinicalStatus,
+                         Diagnostic_status=ss_data2$Diagnostically_positive)
+
+## Calculate probabilities of compartment membership for each posterior draw
+pred_df_m1b$D <- apply(model1b_df[,grep("D", names(model1b_df))], 2, mean)
+pred_df_m1b$SD <- apply(model1b_df[,grep("D", names(model1b_df))], 2, sd)
+pred_df_m1b$LB <- apply(model1b_df[,grep("D", names(model1b_df))], 2, 
+                       quantile, probs=0.025)
+pred_df_m1b$UB <- apply(model1b_df[,grep("D", names(model1b_df))], 2, 
+                       quantile, probs=0.975)
+
+
+summary(pred_df_m1b)
+
+## Apply a cut off of point estimate of 0.5; if pi.D > 0.5, classify as S (symptomatic), otherwise as N;
+## Summarize in a table (clinical status versus diagnostic status)
+table(pred_df_m1b[pred_df_m1b$D > 0.5,]$Clinical_status, 
+      pred_df_m1b[pred_df_m1b$D > 0.5,]$Diagnostic_status)
+
+## Print summary table of clinical status versus diagnostic status from the original data
+table(pred_df_m1b$Clinical_status, pred_df_m1b$Diagnostic_status)
+
+## boxplots
+p1 <- (ggplot(data=pred_df_m1b, aes(x=Diagnostic_status, y=D)) 
+       + geom_boxplot()
+       + theme_bw())
+p2 <- (ggplot(data=pred_df_m1b, aes(x=Clinical_status, y=D)) 
+       + geom_boxplot()
+       + theme_bw())
+
+ggarrange(p1,p2, nrow=1)
+```
+
+
+
+
 
 
 
@@ -320,15 +441,15 @@ logit(\rho) \sim Normal(\mu_{\rho}, \tau^2)
 $$
 where $\mu_\rho=logit^{-1}(\rho^*)$ and $\tau^2=$...
 
-We have a range for the prevalence of (0.05, 0.10). This corresponds to a range of (`r round(log(0.05)/(1-log(0.05)),4)`, `r round(log(0.10)/(1-log(0.10)),4)`) on the logit scale. 
+<!-- We have a range for the prevalence of (0.05, 0.10). This corresponds to a range of (`r round(log(0.05)/(1-log(0.05)),4)`, `r round(log(0.10)/(1-log(0.10)),4)`) on the logit scale.  -->
 
-```{r}
-hist(rnorm(10000, mean = log(0.075)/(1-log(0.075)), sd = 0.03),
-     main="Logit prevalence prior distribution histogram",
-     xlab="logit(prevalence)")
-```
+<!-- ```{r} -->
+<!-- hist(rnorm(10000, mean = log(0.075)/(1-log(0.075)), sd = 0.03), -->
+<!--      main="Logit prevalence prior distribution histogram", -->
+<!--      xlab="logit(prevalence)") -->
+<!-- ``` -->
 
-Note, the prevalence in this population may be higher - these are exposed dogs in the United States in our hunting hound population. We may want to change this, but we also want to generalize this to the larger canine population - to Brazil, if possible.
+<!-- Note, the prevalence in this population may be higher - these are exposed dogs in the United States in our hunting hound population. We may want to change this, but we also want to generalize this to the larger canine population - to Brazil, if possible. -->
 
 #### Linear predictors
 
@@ -348,112 +469,114 @@ $$
 We will assume that the regression coefficients are independent, so $\Sigma_\beta$ is a diagonal matrix.
 
 ### OpenBUGS Model 2 Implementation
+
+Not running this - Model 3 is essentially the same, but with a random intercept term.
   
 ```{r Open Bugs Model 2, include=FALSE, message=FALSE}
 ## Specify data
-y <- 1*(ss_data2$Diagnostically_positive=="Positive")
-
-nind <- nrow(ss_data2)
-
-Sex2 <- 1*(ss_data2$Sex=="M")
-Age <- as.numeric(ss_data2$Age)
-
-## problem with pi.dp
-data <- list(nind=nind,
-             y=y,
-             Sex=Sex2,
-             Age=Age,
-             sens.pcr=sens.pcr,
-             spec.pcr=spec.pcr,
-             sens.dpp=sens.dpp,
-             spec.dpp=spec.dpp,
-             prev=prev,
-             prec.lpi=1/0.03
-)
-
-## Initialize all prior values
-inits <- function(){
-  list(lpi=rnorm(1,log(prev)/(1-log(prev)), 0.03),
-       b1=rnorm(0,1),
-       b2=rnorm(0,1),
-       b3=rnorm(0,1))
-}
-
-## Start MCMC simulation
-sens_spec.sim_m2 <- bugs(data=data, 
-                         inits=inits, ## FIX THIS LINE
-                         model.file="Model2_diag_pos_MO.txt",
-                         parameters=c("D", "lpi",
-                                      "b1", "b2", "b3"),
-                         n.chains=3, n.iter=10000, n.burnin=5000, 
-                         codaPkg=TRUE, debug=TRUE)
-
-## Use coda to read things back into R
-codaobject_m2 <- read.bugs(sens_spec.sim_m2)
-model2_df <- do.call(rbind.data.frame, codaobject_m2)
+# y <- 1*(ss_data2$Diagnostically_positive=="Positive")
+# 
+# nind <- nrow(ss_data2)
+# 
+# Sex2 <- 1*(ss_data2$Sex=="M")
+# Age <- as.numeric(ss_data2$Age)
+# 
+# ## problem with pi.dp
+# data <- list(nind=nind,
+#              y=y,
+#              Sex=Sex2,
+#              Age=Age,
+#              sens.pcr=sens.pcr,
+#              spec.pcr=spec.pcr,
+#              sens.dpp=sens.dpp,
+#              spec.dpp=spec.dpp,
+#              prev=prev,
+#              prec.lpi=100
+# )
+# 
+# ## Initialize all prior values
+# inits <- function(){
+#   list(lpi=rnorm(1,log(prev)/(1-log(prev)), 100),
+#        b1=rnorm(0,1),
+#        b2=rnorm(0,1),
+#        b3=rnorm(0,1))
+# }
+# 
+# ## Start MCMC simulation
+# sens_spec.sim_m2 <- bugs(data=data, 
+#                          inits=inits, ## FIX THIS LINE
+#                          model.file="Model2_diag_pos_MO.txt",
+#                          parameters=c("D", "lpi",
+#                                       "b1", "b2", "b3"),
+#                          n.chains=3, n.iter=10000, n.burnin=5000, 
+#                          codaPkg=TRUE, debug=TRUE)
+# 
+# ## Use coda to read things back into R
+# codaobject_m2 <- read.bugs(sens_spec.sim_m2)
+# model2_df <- do.call(rbind.data.frame, codaobject_m2)
 ```
 
 
 ```{r}
-par(mfrow=c(2,2))
-## Graphial summaries of posterior distribtuions
-hist(exp(model2_df$lpi)/(1+exp(model2_df$lpi)), main="prevalence", xlab="posterior draws")
-abline(v=mean(exp(model2_df$lpi)/(1+exp(model2_df$lpi))), lty="dashed", col="red")
-
-hist(model2_df$b1, main="Age", xlab="posterior draws")
-abline(v=mean(model2_df$b1), lty="dashed", col="red")
-hist(model2_df$b2, main="Sex", xlab="posterior draws")
-abline(v=mean(model2_df$b2), lty="dashed", col="red")
-hist(model2_df$b3, main="Age/Sex Interaction", xlab="posterior draws")
-abline(v=mean(model2_df$b3), lty="dashed", col="red")
-
-## Numeric summaries of posterior distributions
-#boxplot(model2_df[,!(names(model2_df) %in% c("deviance"))])
+# par(mfrow=c(2,2))
+# ## Graphial summaries of posterior distribtuions
+# hist(exp(model2_df$lpi)/(1+exp(model2_df$lpi)), main="prevalence", xlab="posterior draws")
+# abline(v=mean(exp(model2_df$lpi)/(1+exp(model2_df$lpi))), lty="dashed", col="red")
+# 
+# hist(model2_df$b1, main="Age", xlab="posterior draws")
+# abline(v=mean(model2_df$b1), lty="dashed", col="red")
+# hist(model2_df$b2, main="Sex", xlab="posterior draws")
+# abline(v=mean(model2_df$b2), lty="dashed", col="red")
+# hist(model2_df$b3, main="Age/Sex Interaction", xlab="posterior draws")
+# abline(v=mean(model2_df$b3), lty="dashed", col="red")
+# 
+# ## Numeric summaries of posterior distributions
+# #boxplot(model2_df[,!(names(model2_df) %in% c("deviance"))])
 ```
 
-The mean posterior prevalence is `r round(mean(exp(model2_df$lpi)/(1+exp(model2_df$lpi))),4)` and the 95% credible interval is: ( `r round(quantile(exp(model2_df$lpi)/(1+exp(model2_df$lpi)), prob=0.025),4)`, `r round(quantile(exp(model2_df$lpi)/(1+exp(model2_df$lpi)), prob=0.975),4)` ).
+
 
 ### OpenBUGS Model 2 Disease State Prediction
 
 ```{r m2 prediction}
 ## Set up storage for model results
-pred_df_m2 <- data.frame(obs=1:nind,
-                         D=rep(NA,nind), ## average estimate
-                         SD=rep(NA,nind),
-                         LB=rep(NA,nind), ## 2.5th percentile
-                         UB=rep(NA,nind), ## 97.5th percentile
-                         model_assignment=rep(NA,nind),
-                         Clinical_status=ss_data2$ClinicalStatus,
-                         Diagnostic_status=ss_data2$Diagnostically_positive)
-
-## Calculate probabilities of compartment membership for each posterior draw
-pred_df_m2$D <- apply(model2_df[,grep("D", names(model2_df))], 2, mean)
-pred_df_m2$SD <- apply(model2_df[,grep("D", names(model2_df))], 2, sd)
-pred_df_m2$LB <- apply(model2_df[,grep("D", names(model2_df))], 2, 
-                       quantile, probs=0.025)
-pred_df_m2$UB <- apply(model2_df[,grep("D", names(model2_df))], 2, 
-                       quantile, probs=0.975)
-
-
-summary(pred_df_m2)
-
-## Apply a cut off of point estimate of 0.5; if pi.D > 0.5, classify as S (symptomatic), otherwise as N;
-## Summarize in a table (clinical status versus diagnostic status)
-table(pred_df_m2[pred_df_m2$D > 0.5,]$Clinical_status, 
-      pred_df_m2[pred_df_m2$D > 0.5,]$Diagnostic_status)
-
-## Print summary table of clinical status versus diagnostic status from the original data
-table(pred_df_m2$Clinical_status, pred_df_m2$Diagnostic_status)
-
-## boxplots
-p1 <- (ggplot(data=pred_df_m2, aes(x=Diagnostic_status, y=D)) 
-       + geom_boxplot()
-       + theme_bw())
-p2 <- (ggplot(data=pred_df_m2, aes(x=Clinical_status, y=D)) 
-       + geom_boxplot()
-       + theme_bw())
-
-ggarrange(p1,p2, nrow=1)
+# pred_df_m2 <- data.frame(obs=1:nind,
+#                          D=rep(NA,nind), ## average estimate
+#                          SD=rep(NA,nind),
+#                          LB=rep(NA,nind), ## 2.5th percentile
+#                          UB=rep(NA,nind), ## 97.5th percentile
+#                          model_assignment=rep(NA,nind),
+#                          Clinical_status=ss_data2$ClinicalStatus,
+#                          Diagnostic_status=ss_data2$Diagnostically_positive)
+# 
+# ## Calculate probabilities of compartment membership for each posterior draw
+# pred_df_m2$D <- apply(model2_df[,grep("D", names(model2_df))], 2, mean)
+# pred_df_m2$SD <- apply(model2_df[,grep("D", names(model2_df))], 2, sd)
+# pred_df_m2$LB <- apply(model2_df[,grep("D", names(model2_df))], 2, 
+#                        quantile, probs=0.025)
+# pred_df_m2$UB <- apply(model2_df[,grep("D", names(model2_df))], 2, 
+#                        quantile, probs=0.975)
+# 
+# 
+# summary(pred_df_m2)
+# 
+# ## Apply a cut off of point estimate of 0.5; if pi.D > 0.5, classify as S (symptomatic), otherwise as N;
+# ## Summarize in a table (clinical status versus diagnostic status)
+# table(pred_df_m2[pred_df_m2$D > 0.5,]$Clinical_status, 
+#       pred_df_m2[pred_df_m2$D > 0.5,]$Diagnostic_status)
+# 
+# ## Print summary table of clinical status versus diagnostic status from the original data
+# table(pred_df_m2$Clinical_status, pred_df_m2$Diagnostic_status)
+# 
+# ## boxplots
+# p1 <- (ggplot(data=pred_df_m2, aes(x=Diagnostic_status, y=D)) 
+#        + geom_boxplot()
+#        + theme_bw())
+# p2 <- (ggplot(data=pred_df_m2, aes(x=Clinical_status, y=D)) 
+#        + geom_boxplot()
+#        + theme_bw())
+# 
+# ggarrange(p1,p2, nrow=1)
 ```
 
 
@@ -494,13 +617,13 @@ logit(\rho) \sim Normal(\mu_{\rho}, \tau^2)
 $$
 where $\mu_\rho=logit^{-1}(\rho^*)$ and $\tau^2=$...
 
-We have a range for the prevalence of (0.05, 0.10). This corresponds to a range of (`r round(log(0.05)/(1-log(0.05)),4)`, `r round(log(0.10)/(1-log(0.10)),4)`) on the logit scale. 
+<!-- We have a range for the prevalence of (0.05, 0.10). This corresponds to a range of (`r round(log(0.05)/(1-log(0.05)),4)`, `r round(log(0.10)/(1-log(0.10)),4)`) on the logit scale.  -->
 
-```{r}
-hist(rnorm(10000, mean = log(0.075)/(1-log(0.075)), sd = 0.03),
-     main="Logit prevalence prior distribution histogram",
-     xlab="logit(prevalence)")
-```
+<!-- ```{r} -->
+<!-- hist(rnorm(10000, mean = log(0.075)/(1-log(0.075)), sd = 0.03), -->
+<!--      main="Logit prevalence prior distribution histogram", -->
+<!--      xlab="logit(prevalence)") -->
+<!-- ``` -->
 
 Note, the prevalence in this population may be higher - these are exposed dogs in the United States in our hunting hound population. We may want to change this, but we also want to generalize this to the larger canine population - to Brazil, if possible.
 
@@ -542,13 +665,13 @@ data <- list(nind=nind,
              spec.pcr=spec.pcr,
              sens.dpp=sens.dpp,
              spec.dpp=spec.dpp,
-             prev=prev,
-             prec.lpi=1/0.03
+             prev=prev2,
+             prec.lpi=100
 )
 
 ## Initialize all prior values
 inits <- function(){
-  list(lpi=rnorm(1,log(prev)/(1-log(prev)), 0.03),
+  list(lpi=rnorm(1,log(prev)/(1-log(prev)), 100),
        b1=rnorm(0,1),
        b2=rnorm(0,1),
        b3=rnorm(0,1),
@@ -562,7 +685,7 @@ sens_spec.sim_m3 <- bugs(data=data,
                          parameters=c("D", "lpi",
                                       "b1", "b2", "b3",
                                       "eps"),
-                         n.chains=3, n.iter=10000, n.burnin=5000, 
+                         n.chains=3, n.iter=30000, n.burnin=10000, 
                          codaPkg=TRUE, debug=TRUE)
 
 ## Use coda to read things back into R
