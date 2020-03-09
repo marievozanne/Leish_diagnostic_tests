@@ -1,0 +1,20 @@
+model
+{
+# Likelihood
+for (i in 1:nind){
+    ## Data Model - separate tests
+    y.pcr[i] ~ dbern(pi.pcr[i])
+    y.dpp[i] ~ dbern(pi.dpp[i])
+    
+    pi.pcr[i] <- D[i]*sens.pcr + (1-D[i])*(1-spec.pcr)
+    pi.dpp[i] <- D[i]*sens.dpp + (1-D[i])*(1-spec.dpp)
+
+    ## Process Model
+    pi.D[i] <- exp(b1+eps[i])/(1+exp(b1+eps[i]))
+    D[i] ~ dbern(pi.D[i])
+    eps[i] ~ dnorm(0,5.0E-03)
+    }
+
+# Logit prevalence (intercept)
+b1 ~ dnorm(0,1)
+}
